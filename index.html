@@ -659,17 +659,21 @@ async function fetchFolderName(folderId) {
 }
 
 async function fetchAllDriveFiles(rootFolderId) {
-  const allFiles = [];
-  const queue    = [{ id: rootFolderId, path: '/' }];
+  const allFiles  = [];
+  const visitedFolders = new Set(); // 循環参照防止
+  const queue     = [{ id: rootFolderId, path: '/' }];
 
   while (queue.length > 0) {
     const { id: folderId, path } = queue.shift();
+    if (visitedFolders.has(folderId)) continue;
+    visitedFolders.add(folderId);
+
     let pageToken = null;
 
     do {
       const params = new URLSearchParams({
         q:        `'${folderId}' in parents and trashed = false`,
-        fields:   'nextPageToken,files(id,name,mimeType)',
+        fields:   'nextPageToken,files(id,name,mimeType,shortcutDetails)',
         pageSize: '100'
       });
       if (pageToken) params.set('pageToken', pageToken);
@@ -678,9 +682,23 @@ async function fetchAllDriveFiles(rootFolderId) {
       const data = await res.json();
 
       for (const file of (data.files || [])) {
-        if (file.mimeType === 'application/vnd.google-apps.folder') {
+        const isFolder    = file.mimeType === 'application/vnd.google-apps.folder';
+        const isShortcut  = file.mimeType === 'application/vnd.google-apps.shortcut';
+        const targetMime  = file.shortcutDetails?.targetMimeType || '';
+        const targetId    = file.shortcutDetails?.targetId || '';
+        const isFolderSC  = isShortcut && targetMime === 'application/vnd.google-apps.folder';
+
+        if (isFolder) {
+          // 通常フォルダ
           queue.push({ id: file.id, path: `${path}${file.name}/` });
+        } else if (isFolderSC && targetId) {
+          // フォルダへのショートカット → ターゲットフォルダを再帰
+          queue.push({ id: targetId, path: `${path}${file.name}/` });
+        } else if (!isShortcut) {
+          // 通常ファイル
+          allFiles.push({ name: file.name, path });
         } else {
+          // ファイルへのショートカット → ショートカット名で登録
           allFiles.push({ name: file.name, path });
         }
       }
@@ -722,17 +740,22 @@ function parseFilename(raw) {
 /* ----------------------------------------------------------------
    照合ロジック
    ---------------------------------------------------------------- */
+// 比較用の正規化（Unicode NFKC + 小文字化）
+function normalize(str) {
+  return str.normalize('NFKC').toLowerCase();
+}
+
 function matchFile(parsedName, driveFiles) {
-  const lower = parsedName.toLowerCase();
+  const lower = normalize(parsedName);
 
   const exactMatches = driveFiles.filter(f =>
-    removeExtension(f.name).toLowerCase() === lower
+    normalize(removeExtension(f.name)) === lower
   );
   if (exactMatches.length > 0) return { type: 'full', matches: exactMatches };
 
   if (parsedName.length >= 5) {
     const partialMatches = driveFiles.filter(f => {
-      const base = removeExtension(f.name).toLowerCase();
+      const base = normalize(removeExtension(f.name));
       return base.includes(lower) || lower.includes(base);
     });
     if (partialMatches.length > 0) return { type: 'partial', matches: partialMatches };
@@ -743,9 +766,9 @@ function matchFile(parsedName, driveFiles) {
 
 function findSurplusFiles(driveFiles, allParsedNames) {
   return driveFiles.filter(driveFile => {
-    const base = removeExtension(driveFile.name).toLowerCase();
+    const base = normalize(removeExtension(driveFile.name));
     return !allParsedNames.some(name => {
-      const lower = name.toLowerCase();
+      const lower = normalize(name);
       if (base === lower) return true;
       if (name.length >= 5 && (base.includes(lower) || lower.includes(base))) return true;
       return false;
