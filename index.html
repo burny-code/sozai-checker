@@ -508,11 +508,16 @@ async function handleTokenResponse(response) {
     return;
   }
   accessToken = response.access_token;
+  const expiresAt = Date.now() + (response.expires_in || 3600) * 1000;
 
   // ユーザー情報取得
   try {
     const res  = await apiFetch('https://www.googleapis.com/oauth2/v3/userinfo');
     const data = await res.json();
+    // sessionStorageに保存（タブを閉じるまで有効）
+    sessionStorage.setItem('yt_token',      accessToken);
+    sessionStorage.setItem('yt_expires_at', expiresAt);
+    sessionStorage.setItem('yt_email',      data.email);
     setLoggedIn(data.email);
   } catch (e) {
     setLoggedIn('ログイン済み');
@@ -530,9 +535,28 @@ function login() {
 function logout() {
   if (accessToken) google.accounts.oauth2.revoke(accessToken, () => {});
   accessToken = null;
+  sessionStorage.removeItem('yt_token');
+  sessionStorage.removeItem('yt_expires_at');
+  sessionStorage.removeItem('yt_email');
   setLoggedOut();
   hideResults();
   clearBannerError();
+}
+
+function restoreSessionIfValid() {
+  const token     = sessionStorage.getItem('yt_token');
+  const expiresAt = Number(sessionStorage.getItem('yt_expires_at') || 0);
+  const email     = sessionStorage.getItem('yt_email');
+  if (token && expiresAt > Date.now() + 60000) { // 1分以上残っていれば復元
+    accessToken = token;
+    setLoggedIn(email || 'ログイン済み');
+    return true;
+  }
+  // 期限切れなら削除
+  sessionStorage.removeItem('yt_token');
+  sessionStorage.removeItem('yt_expires_at');
+  sessionStorage.removeItem('yt_email');
+  return false;
 }
 
 /* ----------------------------------------------------------------
@@ -1067,6 +1091,11 @@ function toggleExpand(id, el) {
 
 // シート選択変更時にチェックボタンを更新
 document.getElementById('sheet-select').addEventListener('change', updateCheckButton);
+
+// ページ読み込み時にセッション復元を試みる
+window.addEventListener('load', () => {
+  restoreSessionIfValid();
+});
 </script>
 </body>
 </html>
