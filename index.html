@@ -764,9 +764,12 @@ function parseFilename(raw) {
 /* ----------------------------------------------------------------
    照合ロジック
    ---------------------------------------------------------------- */
-// 比較用の正規化（Unicode NFKC + 小文字化）
+// 比較用の正規化（Unicode NFKC + 】後スペース除去 + 小文字化）
 function normalize(str) {
-  return str.normalize('NFKC').toLowerCase();
+  return str
+    .normalize('NFKC')
+    .replace(/】\s+/g, '】')  // 】の直後のスペースを除去
+    .toLowerCase();
 }
 
 function matchFile(parsedName, driveFiles) {
